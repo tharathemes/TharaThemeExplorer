@@ -43,7 +43,7 @@ A modern, lightweight Windows utility to customize File Explorer navigation, lay
 ## 🚀 Download & Installation
 
 1. Go to the [Releases](https://github.com/tharathemes/TharaThemeExplorer/releases) page.
-2. Download `TharaThemeExplorer 2.2.0.exe` from the version 2.2.0 release.
+2. Download `TharaThemeExplorer v2.2.0.exe` from the version 2.2.0 release.
 3. Run the executable.
 4. Choose your preferred settings, then click **Apply** or **OK**.
 
