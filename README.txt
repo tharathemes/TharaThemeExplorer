@@ -34,7 +34,7 @@ SYSTEM REQUIREMENTS
 USAGE
 -------------------------------------------------------------
 1. Download the executable from https://github.com/tharathemes/TharaThemeExplorer/releases.
-2. Run TharaThemeExplorer 2.2.0.exe.
+2. Run TharaThemeExplorer v2.2.0.exe.
 3. Select your desired layout, navigation folders, or fonts.
 4. Click "Apply" or "OK".
 5. If prompted to restart Explorer, click "Yes" to apply changes immediately.
