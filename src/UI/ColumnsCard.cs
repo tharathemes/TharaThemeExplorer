@@ -13,11 +13,14 @@ namespace TharaThemeExplorer.UI
         {
             public string Text;
             public Rectangle Rect;
+            public Control Right;
+            public Control Extra;
         }
 
         private readonly string glyph;
         private readonly string heading;
         private int currentY;
+        private Control headerButton;
         private readonly List<TileInfo> tiles = new List<TileInfo>();
 
         private static readonly Font glyphFont = ThemeColors.IconFont(9.5f);
@@ -37,22 +40,84 @@ namespace TharaThemeExplorer.UI
 
             BackColor = ThemeColors.CCard;
             Width = ThemeColors.S(widthPx);
-            currentY = ThemeColors.S(34);
+            currentY = ThemeColors.S(40);
             Height = currentY;
+        }
+
+        public void SetHeaderButton(Control button)
+        {
+            headerButton = button;
+            button.BackColor = ThemeColors.CCard;
+            PositionHeaderButton();
+            Controls.Add(button);
+            Invalidate();
+        }
+
+        private void PositionHeaderButton()
+        {
+            if (headerButton == null) return;
+            headerButton.Left = Width - headerButton.Width - ThemeColors.S(2);
+            headerButton.Top = ThemeColors.S(3);
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            PositionHeaderButton();
         }
 
         public void Tile(string text, Control right)
         {
-            Rectangle rect = new Rectangle(0, currentY, Width - 1, ThemeColors.S(46));
-            tiles.Add(new TileInfo { Text = text, Rect = rect });
+            Tile(text, right, null);
+        }
+
+        public void Tile(string text, Control right, Control extra)
+        {
+            tiles.Add(new TileInfo { Text = text, Right = right, Extra = extra });
 
             right.BackColor = ThemeColors.CTile;
-            right.Left = rect.Right - ThemeColors.S(14) - right.Width;
-            right.Top = rect.Y + (rect.Height - right.Height) / 2;
             Controls.Add(right);
+            if (extra != null)
+            {
+                extra.BackColor = ThemeColors.CTile;
+                Controls.Add(extra);
+            }
+            LayoutTiles();
+        }
 
-            currentY += rect.Height + ThemeColors.S(10);
+        public void RemoveTile(Control right)
+        {
+            TileInfo found = null;
+            foreach (TileInfo tile in tiles)
+                if (tile.Right == right) { found = tile; break; }
+            if (found == null) return;
+            tiles.Remove(found);
+            Controls.Remove(found.Right);
+            found.Right.Dispose();
+            if (found.Extra != null) { Controls.Remove(found.Extra); found.Extra.Dispose(); }
+            LayoutTiles();
+        }
+
+        private void LayoutTiles()
+        {
+            int tileHeight = ThemeColors.S(46);
+            int verticalStep = tileHeight + ThemeColors.S(10);
+            for (int i = 0; i < tiles.Count; i++)
+            {
+                TileInfo tile = tiles[i];
+                int y = ThemeColors.S(40) + i * verticalStep;
+                tile.Rect = new Rectangle(0, y, Width - 1, tileHeight);
+                tile.Right.Left = tile.Rect.Right - ThemeColors.S(14) - tile.Right.Width;
+                tile.Right.Top = tile.Rect.Y + (tile.Rect.Height - tile.Right.Height) / 2;
+                if (tile.Extra != null)
+                {
+                    tile.Extra.Left = tile.Right.Left - ThemeColors.S(7) - tile.Extra.Width;
+                    tile.Extra.Top = tile.Rect.Y + (tile.Rect.Height - tile.Extra.Height) / 2;
+                }
+            }
+            currentY = ThemeColors.S(40) + tiles.Count * verticalStep;
             Height = currentY;
+            Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -67,12 +132,13 @@ namespace TharaThemeExplorer.UI
                                 heading.IndexOf("order", StringComparison.OrdinalIgnoreCase) >= 0)
                                 ? ThemeColors.S(2) : 0;
             Rectangle glyphRect = new Rectangle(ThemeColors.S(2), ThemeColors.S(5) + glyphYOffset, ThemeColors.S(16), headerH);
-            Rectangle headTextRect = new Rectangle(ThemeColors.S(22), ThemeColors.S(5), Width - ThemeColors.S(24), headerH);
+            int headerWidth = headerButton == null ? Width - ThemeColors.S(24) : Math.Max(1, headerButton.Left - ThemeColors.S(28));
+            Rectangle headTextRect = new Rectangle(ThemeColors.S(22), ThemeColors.S(5), headerWidth, headerH);
 
             TextRenderer.DrawText(g, glyph, glyphFont, glyphRect, ThemeColors.CSub,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             TextRenderer.DrawText(g, heading, headingFont, headTextRect, ThemeColors.CText,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
 
             // Tiles
             foreach (TileInfo t in tiles)
@@ -90,9 +156,10 @@ namespace TharaThemeExplorer.UI
                 }
 
                 // Tile Text
-                Rectangle textRect = new Rectangle(t.Rect.X + ThemeColors.S(14), t.Rect.Y + (t.Rect.Height - ThemeColors.S(20)) / 2, t.Rect.Width - ThemeColors.S(100), ThemeColors.S(20));
+                int rightEdge = t.Extra != null ? t.Extra.Left : t.Right.Left;
+                Rectangle textRect = new Rectangle(t.Rect.X + ThemeColors.S(14), t.Rect.Y + (t.Rect.Height - ThemeColors.S(20)) / 2, Math.Max(1, rightEdge - t.Rect.X - ThemeColors.S(24)), ThemeColors.S(20));
                 TextRenderer.DrawText(g, t.Text, labelFont, textRect, ThemeColors.CText,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
             }
         }
     }
@@ -112,7 +179,12 @@ namespace TharaThemeExplorer.UI
             col.Top = ThemeColors.S(68) + ThemeColors.S(18);
             columns.Add(col);
             Controls.Add(col);
+            col.SizeChanged += (s, e) => UpdateColumnHeight();
+            UpdateColumnHeight();
+        }
 
+        private void UpdateColumnHeight()
+        {
             int maxH = 0;
             foreach (ColumnPanel c in columns)
             {

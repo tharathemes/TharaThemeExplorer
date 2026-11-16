@@ -11,16 +11,13 @@ A modern, lightweight Windows utility to customize File Explorer navigation, lay
 
 ## ✨ Features
 
-* **Explorer Layout:**
-  * **Windows 7:** Classic command bar layout.
-  * **Windows 10:** Ribbon interface.
-  * **Windows 11:** Modern lightweight bar.
+* **Explorer Layout:** Choose Windows 7-style, Windows 10-style, or Windows 11-style layouts on supported Windows 11 builds.
 * **Context Menu:**
   * **Windows 10:** Instant classic full right-click menu (no "Show more options" delay).
   * **Windows 11:** Modern Fluent acrylic context menu.
 * **Navigation Pane Customization:**
   * **Hide Items:** Toggle visibility for Home, Gallery, OneDrive, and Libraries.
-  * **Add Items:** Show or hide Recycle Bin, Control Panel, User folder, and Network.
+  * **Add Items:** Show or hide Recycle Bin, Control Panel, User folder, and Network, and add custom files or folders.
   * **Order:** Customize Home and Gallery position (**Top** / **Bottom**).
 * **Visuals & Window Chrome:**
   * Toggle **Mica effect** in Explorer windows for higher contrast and snappiness.
@@ -29,7 +26,7 @@ A modern, lightweight Windows utility to customize File Explorer navigation, lay
 * **Shell Integration:**
   * One-click **Take Ownership** context menu shortcut for files and folders.
 * **Lightweight & Clean:**
-  * Zero external runtime dependencies (uses pre-installed .NET Framework 4.0).
+  * Portable executable using .NET Framework.
   * High-DPI aware (`PerMonitorV2`).
   * Automatic Explorer process recovery.
 
@@ -37,21 +34,21 @@ A modern, lightweight Windows utility to customize File Explorer navigation, lay
 
 ## 💻 System Requirements
 
-* **Operating System:** Windows 11 (all editions) or Windows 10 (version 1809+, build 17763+)
-* **Architecture:** Universal AnyCPU (supports both **64-bit x64** and **32-bit x86**)
-* **Runtime:** .NET Framework 4.0 or higher (pre-installed by default on Windows 10 & 11)
+* **Operating System:** Windows 10 version 1809 or later (32-bit or 64-bit), or Windows 11 (64-bit).
+* **Runtime:** .NET Framework 4.0 or later.
+* Feature behavior can vary between Windows versions and builds. Some changes request administrator approval and an Explorer restart.
 
 ---
 
 ## 🚀 Download & Installation
 
-1. Go to the [Releases](https://github.com/your-username/TharaThemeExplorer/releases) page.
-2. Download `TharaThemeExplorer-v2.1.0.zip`.
-3. Extract the ZIP to any folder and run `TharaThemeExplorer.exe`.
-4. Choose your preferred layout, navigation items, or typography, then click **Apply** or **OK**.
+1. Go to the [Releases](https://github.com/tharathemes/TharaThemeExplorer/releases) page.
+2. Download `TharaThemeExplorer 2.2.0.exe` from the version 2.2.0 release.
+3. Run the executable.
+4. Choose your preferred settings, then click **Apply** or **OK**.
 
 > **Note on First Launch:**  
-> Because this application is distributed independently as a free tool, Windows SmartScreen may show an unrecognized app prompt on first run. Simply click **"More info"** → **"Run anyway"**.
+> This executable is not digitally signed. Windows SmartScreen may show an unrecognized-app warning on first run.
 
 ---
 

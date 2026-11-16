@@ -14,7 +14,7 @@ namespace TharaThemeExplorer.Core
             {
                 byte[] data = new byte[108];
                 BitConverter.GetBytes(108).CopyTo(data, 0);
-                if (NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETICONTITLELOGFONT, 108, data, 0))
+                if (NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETICONMETRICS, 108, data, 0))
                 {
                     string f = Encoding.Unicode.GetString(data, 44, 64).Split('\0')[0];
                     if (f.Length > 0) face = f;
@@ -80,13 +80,13 @@ namespace TharaThemeExplorer.Core
             {
                 byte[] iconData = new byte[108];
                 BitConverter.GetBytes(108).CopyTo(iconData, 0);
-                if (!NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETICONTITLELOGFONT, 108, iconData, 0))
+                if (!NativeMethods.SystemParametersInfo(NativeMethods.SPI_GETICONMETRICS, 108, iconData, 0))
                 {
                     throw new Exception("Could not read icon font (Win32 error " + Marshal.GetLastWin32Error() + ")");
                 }
                 SetLogFont(iconData, 16, face, height);
                 uint flags = NativeMethods.SPIF_UPDATEINIFILE | NativeMethods.SPIF_SENDCHANGE;
-                if (!NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETICONTITLELOGFONT, 108, iconData, flags))
+                if (!NativeMethods.SystemParametersInfo(NativeMethods.SPI_SETICONMETRICS, 108, iconData, flags))
                 {
                     throw new Exception("Windows refused icon font change (Win32 error " + Marshal.GetLastWin32Error() + ")");
                 }

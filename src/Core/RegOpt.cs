@@ -14,6 +14,7 @@ namespace TharaThemeExplorer.Core
         public int Def { get; set; }
         public bool NeedsRefresh { get; set; }
         public bool OffNeedsRefresh { get; set; }
+        public bool RequiresExplorerRestart { get; set; }
         public bool DefaultOn { get; set; }
         public bool Initial { get; set; }
         public ToggleSwitch Box { get; set; }
@@ -93,10 +94,7 @@ namespace TharaThemeExplorer.Core
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                ShellHelper.LogErr("Write RegOpt: " + Text, ex);
-            }
+            catch { throw; }
         }
     }
 

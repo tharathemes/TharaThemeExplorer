@@ -47,8 +47,21 @@ namespace TharaThemeExplorer.Core
         public static void RefreshTheme()
         {
             ScaleFactor = CalculateScale();
-            Dark = DetectDarkTheme();
             IconFamily = DetectIconFamily();
+            SetPalette(DetectDarkTheme());
+        }
+
+        public static bool RefreshIfChanged()
+        {
+            bool dark = DetectDarkTheme();
+            if (dark == Dark) return false;
+            SetPalette(dark);
+            return true;
+        }
+
+        private static void SetPalette(bool dark)
+        {
+            Dark = dark;
 
             CBlue = !Dark ? Color.FromArgb(0, 102, 254) : Color.FromArgb(96, 165, 250);
             CIndigo = !Dark ? Color.FromArgb(99, 102, 241) : Color.FromArgb(129, 140, 248);
@@ -103,6 +116,30 @@ namespace TharaThemeExplorer.Core
                     Color.FromArgb(247, 244, 255)
                 };
             }
+        }
+
+        public static Color[] ThemeControlColors()
+        {
+            return new Color[] { CCard, CTile, CBar, CBorder, CTrack, CText, CSub };
+        }
+
+        public static Color RemapControlColor(Color color, Color[] oldColors, Color[] newColors)
+        {
+            for (int i = 0; i < oldColors.Length && i < newColors.Length; i++)
+                if (color.ToArgb() == oldColors[i].ToArgb()) return newColors[i];
+            return color;
+        }
+
+        public static void ApplyWindowTheme(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero) return;
+            try
+            {
+                int dark = Dark ? 1 : 0;
+                int result = NativeMethods.DwmSetWindowAttribute(handle, 20, ref dark, 4);
+                if (result != 0) NativeMethods.DwmSetWindowAttribute(handle, 19, ref dark, 4);
+            }
+            catch { }
         }
 
         public static int S(double v)

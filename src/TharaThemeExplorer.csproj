@@ -43,6 +43,7 @@
     <Compile Include="Core\ThemeColors.cs" />
     <Compile Include="Core\RegOpt.cs" />
     <Compile Include="Core\ShellHelper.cs" />
+    <Compile Include="Core\CustomNavigation.cs" />
     <Compile Include="Core\TypographyHelper.cs" />
     <Compile Include="Core\Watcher.cs" />
     <Compile Include="UI\ToggleSwitch.cs" />
@@ -56,7 +57,9 @@
     <Compile Include="UI\CardPanel.cs" />
     <Compile Include="UI\ColumnsCard.cs" />
     <Compile Include="UI\HeaderPanel.cs" />
+    <Compile Include="UI\UnavailableTabOverlay.cs" />
     <Compile Include="Forms\MainForm.cs" />
+    <Compile Include="Forms\CustomPathDialog.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources\logo.png">

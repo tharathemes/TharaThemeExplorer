@@ -43,13 +43,13 @@ namespace TharaThemeExplorer
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (s, e) =>
             {
-                MessageBox.Show("An unexpected error occurred. No further changes were made.", ShellHelper.MyName,
+                MessageBox.Show("An unexpected error occurred. Some changes may already have been applied.", ShellHelper.MyName,
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             };
 
-            if (ShellHelper.WinBuild < 17763)
+            if (ShellHelper.WinBuild < 10240)
             {
-                MessageBox.Show("Windows 10 (version 1809) or Windows 11 is required.", ShellHelper.MyName,
+                MessageBox.Show("Windows 10 or Windows 11 is required.", ShellHelper.MyName,
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -57,6 +57,7 @@ namespace TharaThemeExplorer
             if (args.Length == 0)
             {
                 MigrateOldSettings();
+                Watcher.EnsureCurrentWatcher();
                 Application.Run(new OptionsDialog());
                 return;
             }

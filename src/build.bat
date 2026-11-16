@@ -1,5 +1,10 @@
 @echo off
-set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
+set "CSC=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+if not exist "%CSC%" set "CSC=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+if not exist "%CSC%" (
+  echo .NET Framework 4 C# compiler was not found.
+  exit /b 1
+)
 set SCRIPT_DIR=%~dp0
 set OUT=%SCRIPT_DIR%bin\Release\TharaThemeExplorer.exe
 set ICON=%SCRIPT_DIR%Resources\TharaThemeExplorer.ico
@@ -20,6 +25,7 @@ pushd "%SCRIPT_DIR%"
   Core\ThemeColors.cs ^
   Core\RegOpt.cs ^
   Core\ShellHelper.cs ^
+  Core\CustomNavigation.cs ^
   Core\TypographyHelper.cs ^
   Core\Watcher.cs ^
   UI\ToggleSwitch.cs ^
@@ -33,6 +39,10 @@ pushd "%SCRIPT_DIR%"
   UI\CardPanel.cs ^
   UI\ColumnsCard.cs ^
   UI\HeaderPanel.cs ^
+  UI\UnavailableTabOverlay.cs ^
   Forms\MainForm.cs ^
+  Forms\CustomPathDialog.cs ^
   Program.cs
+set "BUILD_ERROR=%ERRORLEVEL%"
 popd
+exit /b %BUILD_ERROR%

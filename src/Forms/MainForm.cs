@@ -21,6 +21,7 @@ namespace TharaThemeExplorer
             private BodyPanel pageW10;
             private BodyPanel pageW11;
             private BodyPanel pageType;
+            private UnavailableTabOverlay unavailableOverlay;
 
             private TabStrip tabs;
             private ThumbnailSelector thumbStyle;
@@ -37,12 +38,17 @@ namespace TharaThemeExplorer
 
             private StatusDot statusDot;
             private Label statusText;
+            private StatusBadge micaBadge;
+            private RegOpt micaOption;
+            private Card micaCard;
+            private System.Windows.Forms.Timer uiStatusTimer;
             private FontPicker fontPick;
             private Label previewLbl;
             private ToggleSwitch[] typeToggles;
 
             private string initFace;
             private int initPt;
+            private bool[] initTypeToggles;
             private int initStyle;
             private int initMenu;
             private bool initW7on10;
@@ -53,6 +59,19 @@ namespace TharaThemeExplorer
             private readonly List<NavOpt> nav11 = new List<NavOpt>();
             private readonly List<ChoiceOpt> ch11 = new List<ChoiceOpt>();
             private readonly ToolTip tip = new ToolTip();
+            private readonly List<CustomUiItem> customItems = new List<CustomUiItem>();
+            private ColumnPanel customCol10;
+            private ColumnPanel customCol11;
+            private bool syncingCustom;
+
+            private sealed class CustomUiItem
+            {
+                public CustomNavigation.Item Item;
+                public bool IsNew;
+                public bool Deleted;
+                public ToggleSwitch Box10;
+                public ToggleSwitch Box11;
+            }
 
             protected override CreateParams CreateParams
             {
@@ -72,15 +91,57 @@ namespace TharaThemeExplorer
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            try
+            ThemeColors.ApplyWindowTheme(Handle);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (uiStatusTimer != null && !IsDisposed && !Disposing &&
+                (m.Msg == (int)NativeMethods.WM_SETTINGCHANGE || m.Msg == (int)NativeMethods.WM_THEMECHANGED))
+                RefreshSystemTheme();
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            if (uiStatusTimer != null && !IsDisposed && !Disposing) RefreshSystemTheme();
+        }
+
+        private static void RecolorControls(Control control, Color[] oldColors, Color[] newColors, Color oldBlue, Color oldAccent)
+        {
+            if (control.IsDisposed) return;
+            Color back = ThemeColors.RemapControlColor(control.BackColor, oldColors, newColors);
+            Color fore = ThemeColors.RemapControlColor(control.ForeColor, oldColors, newColors);
+            if (back.ToArgb() != control.BackColor.ToArgb()) control.BackColor = back;
+            if (fore.ToArgb() != control.ForeColor.ToArgb()) control.ForeColor = fore;
+            StatusDot dot = control as StatusDot;
+            if (dot != null && dot.DotColor.ToArgb() == oldBlue.ToArgb()) dot.DotColor = ThemeColors.CBlue;
+            StatusBadge badge = control as StatusBadge;
+            if (badge != null && badge.BadgeColor.ToArgb() == oldAccent.ToArgb()) badge.BadgeColor = ThemeColors.Accent;
+            foreach (Control child in control.Controls) RecolorControls(child, oldColors, newColors, oldBlue, oldAccent);
+            control.Invalidate();
+        }
+
+        private void RefreshSystemTheme()
+        {
+            Color[] oldColors = ThemeColors.ThemeControlColors();
+            Color oldBlue = ThemeColors.CBlue;
+            Color oldAccent = ThemeColors.Accent;
+            if (!ThemeColors.RefreshIfChanged()) return;
+
+            Color[] newColors = ThemeColors.ThemeControlColors();
+            List<Form> forms = new List<Form>();
+            foreach (Form form in Application.OpenForms) forms.Add(form);
+            foreach (Form form in forms)
             {
-                if (ThemeColors.Dark)
-                {
-                    int darkVal = 1;
-                    NativeMethods.DwmSetWindowAttribute(Handle, NativeMethods.DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkVal, 4);
-                }
+                if (form.IsDisposed) continue;
+                RecolorControls(form, oldColors, newColors, oldBlue, oldAccent);
+                if (form.IsHandleCreated) ThemeColors.ApplyWindowTheme(form.Handle);
+                form.Invalidate(true);
             }
-            catch { }
+            if (unavailableOverlay != null && unavailableOverlay.Visible)
+                unavailableOverlay.CapturePage(tabs.SelectedIndex == 0 ? pageW10 : pageW11);
         }
 
         private void InitializeComponent()
@@ -195,6 +256,7 @@ namespace TharaThemeExplorer
                 pageW10.Visible = (tabs.SelectedIndex == 0);
                 pageW11.Visible = (tabs.SelectedIndex == 1);
                 pageType.Visible = (tabs.SelectedIndex == 2);
+                UpdateUnavailableOverlay();
             };
             toolbar.Controls.Add(tabs);
             Controls.Add(toolbar);
@@ -210,6 +272,8 @@ namespace TharaThemeExplorer
             Controls.Add(pageW10);
             Controls.Add(pageW11);
             Controls.Add(pageType);
+            unavailableOverlay = new UnavailableTabOverlay();
+            Controls.Add(unavailableOverlay);
 
             // 4. Footer Panel
             footer = new Panel
@@ -277,6 +341,13 @@ namespace TharaThemeExplorer
             btnRestart.Click += (o, e) => RestartClicked();
             btnReload.Click += (o, e) => ResetToDefaults();
 
+            try
+            {
+                foreach (CustomNavigation.Item item in CustomNavigation.Load())
+                    customItems.Add(new CustomUiItem { Item = item });
+            }
+            catch (Exception ex) { SetStatus("Could not load custom navigation items: " + ex.Message, ThemeColors.CRed); }
+
             BuildWin11Page();
             BuildWin10Page();
             BuildTypePage();
@@ -289,7 +360,25 @@ namespace TharaThemeExplorer
             pageW11.Visible = ShellHelper.IsWin11;
             pageType.Visible = false;
 
+            uiStatusTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+            uiStatusTimer.Tick += (s, e) =>
+            {
+                RefreshSystemTheme();
+                if (ShellHelper.IsWin11) UpdateMicaStatus();
+            };
+            uiStatusTimer.Start();
+            FormClosed += (s, e) => { uiStatusTimer.Stop(); uiStatusTimer.Dispose(); };
             UpdateDirty();
+        }
+
+        private void UpdateUnavailableOverlay()
+        {
+            if (unavailableOverlay == null || tabs == null) return;
+            if (tabs.SelectedIndex == 0 && ShellHelper.IsWin11)
+                unavailableOverlay.ShowFor(pageW10, "Windows 10", "Windows 11");
+            else if (tabs.SelectedIndex == 1 && !ShellHelper.IsWin11)
+                unavailableOverlay.ShowFor(pageW11, "Windows 11", "Windows 10");
+            else unavailableOverlay.HideOverlay();
         }
 
         private ToggleSwitch CreateToggle(bool val)
@@ -325,6 +414,127 @@ namespace TharaThemeExplorer
             opt.Box = CreateToggle(opt.Initial);
             list.Add(opt);
             col.Tile("Hide " + ShellHelper.NavItems[idx, 0], opt.Box);
+        }
+
+        private void AddCustomHeader(ColumnPanel col)
+        {
+            PillButton add = new PillButton("Add more", true, 78)
+            {
+                Height = ThemeColors.S(26),
+                KeepAccentOnHover = true,
+                BackgroundInset = 2,
+                Font = ThemeColors.F("Segoe UI Semibold", 8.5f),
+                AccessibleName = "Add a custom file or folder"
+            };
+            tip.SetToolTip(add, "Add a custom file or folder");
+            add.Click += (s, e) => AddCustomItem();
+            col.SetHeaderButton(add);
+        }
+
+        private void AddCustomRow(ColumnPanel col, CustomUiItem entry, bool windows11)
+        {
+            bool value = entry.IsNew || entry.Item.InitialEnabled;
+            ToggleSwitch toggle = CreateToggle(value);
+            PillButton remove = new PillButton(ThemeColors.Glyph(0xE74D), false, 28)
+            {
+                Height = ThemeColors.S(28),
+                IconOnly = true,
+                IconSize = 9f,
+                AccessibleName = "Remove " + entry.Item.Name
+            };
+            if (windows11) entry.Box11 = toggle; else entry.Box10 = toggle;
+            toggle.CheckedChanged += (s, e) =>
+            {
+                if (syncingCustom) return;
+                syncingCustom = true;
+                try
+                {
+                    ToggleSwitch other = windows11 ? entry.Box10 : entry.Box11;
+                    if (other != null && other.Checked != toggle.Checked) other.Checked = toggle.Checked;
+                }
+                finally { syncingCustom = false; }
+                UpdateDirty();
+            };
+            remove.Click += (s, e) => RemoveCustomItem(entry);
+            tip.SetToolTip(toggle, entry.Item.Path);
+            tip.SetToolTip(remove, "Remove this entry after Apply. The original file or folder is not deleted.");
+            string label = "Show " + (entry.Item.IsFile ? "file: " : "") + entry.Item.Name;
+            col.Tile(label, toggle, remove);
+        }
+
+        private void AddCustomItem()
+        {
+            using (CustomPathDialog dialog = new CustomPathDialog())
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                CustomNavigation.Item item = dialog.SelectedItem;
+                foreach (CustomUiItem existing in customItems)
+                {
+                    if (!existing.Deleted && string.Equals(existing.Item.Path.TrimEnd('\\', '/'), item.Path.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                    {
+                        MessageBox.Show(this, "This file or folder is already in the Add Items list.", ShellHelper.MyName,
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+                }
+                CustomUiItem added = new CustomUiItem { Item = item, IsNew = true };
+                customItems.Add(added);
+                AddCustomRow(customCol10, added, false);
+                AddCustomRow(customCol11, added, true);
+                UpdateDirty();
+            }
+        }
+
+        private void RemoveCustomItem(CustomUiItem entry)
+        {
+            if (entry.IsNew) customItems.Remove(entry);
+            else entry.Deleted = true;
+            if (entry.Box10 != null) { customCol10.RemoveTile(entry.Box10); entry.Box10 = null; }
+            if (entry.Box11 != null) { customCol11.RemoveTile(entry.Box11); entry.Box11 = null; }
+            UpdateDirty();
+        }
+
+        private bool CustomItemsChanged()
+        {
+            foreach (CustomUiItem entry in customItems)
+            {
+                if (entry.IsNew || entry.Deleted) return true;
+                ToggleSwitch box = ShellHelper.IsWin11 ? entry.Box11 : entry.Box10;
+                if (box != null && box.Checked != entry.Item.InitialEnabled) return true;
+            }
+            return false;
+        }
+
+        private void ApplyCustomItems()
+        {
+            List<CustomUiItem> removed = new List<CustomUiItem>();
+            foreach (CustomUiItem entry in customItems)
+            {
+                try
+                {
+                    if (entry.Deleted)
+                    {
+                        if (!entry.IsNew) CustomNavigation.Delete(entry.Item);
+                        removed.Add(entry);
+                        continue;
+                    }
+                    ToggleSwitch box = ShellHelper.IsWin11 ? entry.Box11 : entry.Box10;
+                    bool enabled = box != null && box.Checked;
+                    if (entry.IsNew)
+                    {
+                        CustomNavigation.Add(entry.Item, enabled);
+                        entry.IsNew = false;
+                        entry.Item.InitialEnabled = enabled;
+                    }
+                    else if (enabled != entry.Item.InitialEnabled)
+                    {
+                        CustomNavigation.SetEnabled(entry.Item, enabled);
+                        entry.Item.InitialEnabled = enabled;
+                    }
+                }
+                catch (Exception ex) { ShellHelper.LogErr("Custom item " + entry.Item.Name, ex); }
+            }
+            foreach (CustomUiItem entry in removed) customItems.Remove(entry);
         }
 
         private void ChoiceTile(ColumnPanel col, ChoiceOpt opt, string tooltip)
@@ -363,7 +573,43 @@ namespace TharaThemeExplorer
             w.Left = marginX;
             w.Top = y;
             page.Controls.Add(w);
+            int previousHeight = w.Height;
+            w.SizeChanged += (s, e) =>
+            {
+                int delta = w.Height - previousHeight;
+                if (delta != 0)
+                {
+                    int previousBottom = w.Top + previousHeight;
+                    foreach (Control sibling in page.Controls)
+                        if (sibling != w && sibling.Top >= previousBottom) sibling.Top += delta;
+                    previousHeight = w.Height;
+                }
+            };
             y += w.Height + ThemeColors.S(16);
+        }
+
+        private void BindResizableRow(Panel page, params Card[] cards)
+        {
+            int previousHeight = cards[0].Height;
+            EventHandler update = (sender, e) =>
+            {
+                int nextHeight = 0;
+                foreach (Card card in cards) nextHeight = Math.Max(nextHeight, card.ContentHeight);
+                int delta = nextHeight - previousHeight;
+                int previousBottom = cards[0].Top + previousHeight;
+                foreach (Card card in cards) card.Height = nextHeight;
+                if (delta != 0)
+                {
+                    foreach (Control sibling in page.Controls)
+                    {
+                        bool inRow = false;
+                        foreach (Card card in cards) if (sibling == card) { inRow = true; break; }
+                        if (!inRow && sibling.Top >= previousBottom) sibling.Top += delta;
+                    }
+                }
+                previousHeight = nextHeight;
+            };
+            foreach (Card card in cards) card.ContentHeightChanged += update;
         }
 
         private StatusBadge MakeChip(string name, string okText, bool showWhenOk)
@@ -375,6 +621,23 @@ namespace TharaThemeExplorer
                 return showWhenOk ? new StatusBadge("Status: " + okText, ThemeColors.Accent) : null;
             }
             return new StatusBadge("Status: Windows refused the change (0x" + ((int)val).ToString("X8") + ")", ThemeColors.CRed);
+        }
+
+        private void UpdateMicaStatus()
+        {
+            if (micaBadge == null || micaOption == null || micaOption.Box == null || micaCard == null) return;
+            object result = null;
+            try { result = Registry.GetValue(ShellHelper.MyKey, "MicaLastResult", null); }
+            catch { }
+            string text = ShellHelper.MicaErrorStatus(micaOption.Box.Checked, micaOption.Initial, ShellHelper.WinBuild, result);
+            if (text != null)
+            {
+                micaBadge.Text = text;
+                micaBadge.BadgeColor = ThemeColors.CRed;
+                micaBadge.Width = TextRenderer.MeasureText(text, ThemeColors.F("Segoe UI Semibold", 8f)).Width + ThemeColors.S(32);
+                micaBadge.Invalidate();
+            }
+            micaCard.SetOptionalStatusVisible(text != null);
         }
 
         private Card CreateThisPcCard(List<RegOpt> list)
@@ -408,7 +671,13 @@ namespace TharaThemeExplorer
             };
             card1.Section("Explorer layout", thumbStyle, ThemeColors.S(186));
             card1.Note("Windows 7 uses classic command bar; Windows 11 uses modern lightweight bar.");
-            OptRow(card1, opts11, ShellHelper.MicaOpt(), "Increases window contrast and snappiness.", MakeChip("MicaLastResult", "applied to Explorer windows", true));
+            micaOption = ShellHelper.MicaOpt();
+            micaBadge = new StatusBadge("Status: Last Mica operation failed", ThemeColors.CRed);
+            micaCard = card1;
+            OptRow(card1, opts11, micaOption, "Increases window contrast and snappiness.", null);
+            card1.AddOptionalStatus(micaBadge);
+            micaOption.Box.CheckedChanged += (o, e) => UpdateMicaStatus();
+            UpdateMicaStatus();
 
             // Context Menu Card
             Card card2 = new Card(ThemeColors.Glyph(59645), "Right-click menu", "Context menu style and shell extensions", ThemeColors.Accent, 496);
@@ -423,21 +692,25 @@ namespace TharaThemeExplorer
             OptRow(card2, opts11, ShellHelper.TakeOwnershipOpt(), "Adds quick Take Ownership entry for files & folders.", null);
 
             PlaceRow(pageW11, ref curY, card1, card2);
+            BindResizableRow(pageW11, card1, card2);
 
             // Navigation Pane Columns Card
             ColumnsCard navCard = new ColumnsCard(ThemeColors.Glyph(59136), "Navigation pane", "Control side tree view visibility, pinned special folders, and order", ThemeColors.Accent, 1008);
             int colW = 314;
 
-            ColumnPanel colHide = new ColumnPanel(ThemeColors.Glyph(60698), "Navigation pane: Hide Items", colW);
+            ColumnPanel colHide = new ColumnPanel(ThemeColors.Glyph(60698), "Hide Items", colW);
             NavTile(colHide, nav11, 0);
             NavTile(colHide, nav11, 1);
             NavTile(colHide, nav11, 2);
             NavTile(colHide, nav11, 3);
 
-            ColumnPanel colAdd = new ColumnPanel(ThemeColors.Glyph(59152), "Navigation pane: Add Items", colW);
+            ColumnPanel colAdd = new ColumnPanel(ThemeColors.Glyph(59152), "Add Items", colW);
+            customCol11 = colAdd;
+            AddCustomHeader(colAdd);
             foreach (RegOpt opt in ShellHelper.NavAddOpts()) OptTile(colAdd, opts11, opt);
+            foreach (CustomUiItem item in customItems) AddCustomRow(colAdd, item, true);
 
-            ColumnPanel colOrder = new ColumnPanel(ThemeColors.Glyph(59595), "Navigation pane: Order", colW);
+            ColumnPanel colOrder = new ColumnPanel(ThemeColors.Glyph(59595), "Order", colW);
             bool showAll = ShellHelper.ReadDword(ShellHelper.ADVF, "NavPaneShowAllFolders", 0) == 1;
             string orderTip = showAll ? "No effect while \"Show all folders\" is on in Folder Options." : null;
             ChoiceTile(colOrder, ShellHelper.PosOpt("Home position", "{f874310e-b6b7-47dc-bc84-b9e6b38f5903}", 72), orderTip);
@@ -475,12 +748,15 @@ namespace TharaThemeExplorer
 
             ColumnsCard navCard = new ColumnsCard(ThemeColors.Glyph(59136), "Navigation pane", "Control side tree view visibility and pinned special folders", ThemeColors.Accent, 1008);
             int colW = 480;
-            ColumnPanel colHide = new ColumnPanel(ThemeColors.Glyph(60698), "Navigation pane: Hide Items", colW);
+            ColumnPanel colHide = new ColumnPanel(ThemeColors.Glyph(60698), "Hide Items", colW);
             NavTile(colHide, nav10, 2);
             NavTile(colHide, nav10, 3);
 
-            ColumnPanel colAdd = new ColumnPanel(ThemeColors.Glyph(59152), "Navigation pane: Add Items", colW);
+            ColumnPanel colAdd = new ColumnPanel(ThemeColors.Glyph(59152), "Add Items", colW);
+            customCol10 = colAdd;
+            AddCustomHeader(colAdd);
             foreach (RegOpt opt in ShellHelper.NavAddOpts()) OptTile(colAdd, opts10, opt);
+            foreach (CustomUiItem item in customItems) AddCustomRow(colAdd, item, false);
 
             navCard.AddColumn(colHide);
             navCard.AddColumn(colAdd);
@@ -506,8 +782,12 @@ namespace TharaThemeExplorer
 
         private bool TypoChanged()
         {
-            return fontPick != null && sizeSeg != null &&
-                   (fontPick.Value != initFace || sizeSeg.SelectedIndex != IndexOfPt(initPt));
+            if (fontPick == null || sizeSeg == null) return false;
+            if (fontPick.Value != initFace || sizeSeg.SelectedIndex != IndexOfPt(initPt)) return true;
+            if (initTypeToggles != null && typeToggles != null)
+                for (int i = 0; i < typeToggles.Length; i++)
+                    if (typeToggles[i].Checked != initTypeToggles[i]) return true;
+            return false;
         }
 
         private void UpdatePreview()
@@ -577,8 +857,11 @@ namespace TharaThemeExplorer
             for (int i = 0; i < names.Length; i++)
             {
                 typeToggles[i] = new ToggleSwitch { Checked = true };
+                typeToggles[i].CheckedChanged += (o, e) => UpdateDirty();
                 card2.Row(names[i], descs[i], typeToggles[i], null);
             }
+            initTypeToggles = new bool[names.Length];
+            for (int i = 0; i < names.Length; i++) initTypeToggles[i] = typeToggles[i].Checked;
 
             PlaceRow(pageType, ref curY, card1, card2);
             UpdatePreview();
@@ -598,6 +881,7 @@ namespace TharaThemeExplorer
         private bool HasChanges()
         {
             if (TypoChanged()) return true;
+            if (CustomItemsChanged()) return true;
 
             if (ShellHelper.IsWin11)
             {
@@ -674,7 +958,7 @@ namespace TharaThemeExplorer
         private void RestartClicked()
         {
             DialogResult dr = MessageBox.Show(this,
-                "Restart Windows Explorer now?\n\nThe taskbar and desktop reload for a moment. Open Explorer windows are reopened.",
+                "Restart Windows Explorer now?\n\nThe taskbar and desktop reload for a moment. Known Explorer locations are reopened where possible; tabs may not be restored.",
                 ShellHelper.MyName, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (dr != DialogResult.Yes) return;
 
@@ -704,6 +988,12 @@ namespace TharaThemeExplorer
             ShellHelper.RunLog.Clear();
             bool needRestart = false;
             bool refreshWindows = false;
+            bool styleChanged = false;
+            bool styleFailed = false;
+            bool typographyFailed = false;
+            HashSet<RegOpt> failedOptions = new HashSet<RegOpt>();
+            HashSet<NavOpt> failedNav = new HashSet<NavOpt>();
+            HashSet<ChoiceOpt> failedChoices = new HashSet<ChoiceOpt>();
             int styleIdx = ShellHelper.IsWin11 ? thumbStyle.SelectedIndex : -1;
 
             if (ShellHelper.IsWin11)
@@ -717,16 +1007,18 @@ namespace TharaThemeExplorer
 
                 if (wantWin10Exp != win10Exp || wantRibbon != ribbonOverride || wantWin10Ctx != win10Ctx)
                 {
-                    needRestart = true;
+                    needRestart = styleChanged = true;
                 }
             }
             else
             {
-                if (w7on10.Checked != ShellHelper.RibbonOverrideActive()) needRestart = true;
+                if (w7on10.Checked != ShellHelper.RibbonOverrideActive()) needRestart = styleChanged = true;
             }
 
             foreach (RegOpt r in ActiveOpts)
             {
+                if (r.Box.Checked != r.Initial && r.RequiresExplorerRestart)
+                    needRestart = true;
                 if (r.Box.Checked != r.Initial && (r.NeedsRefresh || (!r.Box.Checked && r.OffNeedsRefresh)))
                 {
                     refreshWindows = true;
@@ -744,12 +1036,13 @@ namespace TharaThemeExplorer
                 }
             }
             if (TypoChanged()) refreshWindows = true;
+            if (CustomItemsChanged()) refreshWindows = true;
 
             bool restartNow = false;
             if (needRestart)
             {
                 DialogResult dr = MessageBox.Show(this,
-                    "Some of your changes (Explorer style or right-click menu) only take effect after Windows Explorer restarts. The taskbar and desktop reload for a moment, and open Explorer windows are reopened.\n\nYes: apply and restart Explorer now\nNo: apply, but do not restart\nCancel: go back",
+                    "Some changes may need Windows Explorer to restart. Known locations reopen where possible; tabs may not be restored.\n\nYes: apply and restart Explorer now\nNo: apply and reopen Explorer windows only\nCancel: go back",
                     ShellHelper.MyName, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
                 if (dr == DialogResult.Cancel) return;
                 restartNow = (dr == DialogResult.Yes);
@@ -759,37 +1052,50 @@ namespace TharaThemeExplorer
             ShellHelper.Log(string.Format("Apply pressed: needRestart={0}, restartNow={1}, refresh={2}, win11={3}",
                 needRestart, restartNow, refreshWindows, ShellHelper.IsWin11));
 
-            if (ShellHelper.IsWin11)
+            if (styleChanged)
             {
-                bool e10 = (styleIdx <= 1);
-                bool e11 = (styleIdx == 2);
-                bool c10 = (thumbMenu.SelectedIndex == 0);
-                bool c11 = (thumbMenu.SelectedIndex == 1);
-                ShellHelper.ApplyRibbonOverride(styleIdx == 0);
-                ShellHelper.SaveSettings(e10, e11, c10, c11, restartNow, refreshWindows || restartNow);
-            }
-            else
-            {
-                if (w7on10.Checked != ShellHelper.RibbonOverrideActive())
+                int beforeStyle = ShellHelper.RunLog.Count;
+                try
                 {
-                    ShellHelper.ApplyRibbonOverride(w7on10.Checked);
+                    if (ShellHelper.IsWin11)
+                    {
+                        bool e10 = (styleIdx <= 1);
+                        bool e11 = (styleIdx == 2);
+                        bool c10 = (thumbMenu.SelectedIndex == 0);
+                        bool c11 = (thumbMenu.SelectedIndex == 1);
+                        ShellHelper.ApplyRibbonOverride(styleIdx == 0);
+                        ShellHelper.SaveSettings(e10, e11, c10, c11, false, false);
+                    }
+                    else
+                    {
+                        ShellHelper.ApplyRibbonOverride(w7on10.Checked);
+                        ShellHelper.SaveSettings(false, false, false, false, false, false);
+                    }
                 }
-                ShellHelper.SaveSettings(false, false, false, false, restartNow, refreshWindows || restartNow);
+                catch (Exception ex) { styleFailed = true; ShellHelper.LogErr("Explorer style", ex); }
+                for (int i = beforeStyle; i < ShellHelper.RunLog.Count; i++)
+                    if (ShellHelper.RunLog[i].Contains("FAILED")) styleFailed = true;
             }
 
             foreach (RegOpt r in ActiveOpts)
             {
                 if (r.Box.Checked != r.Initial)
                 {
-                    try { r.Write(r.Box.Checked); }
-                    catch (Exception ex) { ShellHelper.LogErr(r.Text, ex); }
+                    try
+                    {
+                        if (r == micaOption) ShellHelper.DeleteDword(ShellHelper.MyKey, "MicaLastResult");
+                        r.Write(r.Box.Checked);
+                    }
+                    catch (Exception ex) { failedOptions.Add(r); ShellHelper.LogErr(r.Text, ex); }
                 }
             }
+            ApplyCustomItems();
             foreach (NavOpt n in ActiveNav)
             {
                 if (n.Box.Checked != n.Initial)
                 {
-                    ShellHelper.SetNavHidden(n.Clsid, n.Box.Checked);
+                    try { ShellHelper.SetNavHidden(n.Clsid, n.Box.Checked); }
+                    catch (Exception ex) { failedNav.Add(n); ShellHelper.LogErr("Navigation pane", ex); }
                 }
             }
             if (ShellHelper.IsWin11)
@@ -799,7 +1105,7 @@ namespace TharaThemeExplorer
                     if (c.Seg.SelectedIndex != c.Initial)
                     {
                         try { c.WriteFn(c.Seg.SelectedIndex); }
-                        catch (Exception ex) { ShellHelper.LogErr(c.Text, ex); }
+                        catch (Exception ex) { failedChoices.Add(c); ShellHelper.LogErr(c.Text, ex); }
                     }
                 }
             }
@@ -813,6 +1119,7 @@ namespace TharaThemeExplorer
                 }
                 if (!anyChecked)
                 {
+                    typographyFailed = true;
                     ShellHelper.Log("FAILED  Typography: choose at least one place to use the font.");
                 }
                 else
@@ -826,6 +1133,7 @@ namespace TharaThemeExplorer
                     }
                     catch (Exception ex)
                     {
+                        typographyFailed = true;
                         ShellHelper.LogErr("Typography", ex);
                     }
                 }
@@ -834,26 +1142,44 @@ namespace TharaThemeExplorer
             bool needWatcher = false;
             foreach (RegOpt r in ActiveOpts)
             {
-                if (r.Key == ShellHelper.MyKey && r.Box.Checked) needWatcher = true;
+                if (r.Key == ShellHelper.MyKey && r.Read()) needWatcher = true;
             }
             Watcher.SetWatcherRun(needWatcher);
             if (needWatcher) Watcher.StartWatcher();
 
+            // Apply every setting before refreshing or restarting Explorer.
+            if (refreshWindows || restartNow)
+            {
+                try { ShellHelper.RefreshExplorer(restartNow); }
+                catch (Exception ex) { ShellHelper.LogErr("Refreshing Explorer", ex); }
+            }
+
             ShellHelper.SaveLog();
 
-            initFace = fontPick.Value;
-            initPt = CurrentSizePt();
-            foreach (RegOpt r in ActiveOpts) r.Initial = r.Box.Checked;
-            foreach (NavOpt n in ActiveNav) n.Initial = n.Box.Checked;
+            if (!typographyFailed)
+            {
+                initFace = fontPick.Value;
+                initPt = CurrentSizePt();
+                for (int i = 0; i < typeToggles.Length; i++) initTypeToggles[i] = typeToggles[i].Checked;
+            }
+            foreach (RegOpt r in ActiveOpts)
+                if (!failedOptions.Contains(r)) r.Initial = r.Box.Checked;
+            UpdateMicaStatus();
+            foreach (NavOpt n in ActiveNav)
+                if (!failedNav.Contains(n)) n.Initial = n.Box.Checked;
             if (ShellHelper.IsWin11)
             {
-                foreach (ChoiceOpt c in ch11) c.Initial = c.Seg.SelectedIndex;
-                initStyle = thumbStyle.SelectedIndex;
-                initMenu = thumbMenu.SelectedIndex;
+                foreach (ChoiceOpt c in ch11)
+                    if (!failedChoices.Contains(c)) c.Initial = c.Seg.SelectedIndex;
+                if (!styleFailed)
+                {
+                    initStyle = thumbStyle.SelectedIndex;
+                    initMenu = thumbMenu.SelectedIndex;
+                }
             }
             else
             {
-                initW7on10 = w7on10.Checked;
+                if (!styleFailed) initW7on10 = w7on10.Checked;
             }
 
             Cursor = Cursors.Default;
@@ -872,7 +1198,7 @@ namespace TharaThemeExplorer
             }
             else if (needRestart && !restartNow)
             {
-                SetStatus("Applied. Restart Explorer to finish the style or menu change.", Color.FromArgb(157, 93, 0));
+                SetStatus("Applied. Restart Explorer to finish applying the changes.", Color.FromArgb(157, 93, 0));
             }
             else if (restartNow)
             {
@@ -880,7 +1206,7 @@ namespace TharaThemeExplorer
             }
             else if (refreshWindows)
             {
-                SetStatus("Applied. Explorer windows were refreshed.", Color.FromArgb(16, 137, 62));
+                SetStatus("Applied. Explorer windows were closed and reopened.", Color.FromArgb(16, 137, 62));
             }
             else
             {

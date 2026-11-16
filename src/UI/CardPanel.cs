@@ -28,8 +28,15 @@ namespace TharaThemeExplorer.UI
         private readonly string title;
         private readonly string subtitle;
         private readonly Color iconColor;
+        private readonly bool useThemeAccent;
         private int currentY;
         private int rowCount;
+        private Control optionalStatus;
+        private int optionalStatusExtra;
+        private bool optionalStatusVisible;
+
+        public event EventHandler ContentHeightChanged;
+        public int ContentHeight { get { return currentY + ThemeColors.S(8); } }
 
         private readonly List<CardRowInfo> rows = new List<CardRowInfo>();
         private readonly List<NoteInfo> notes = new List<NoteInfo>();
@@ -46,6 +53,7 @@ namespace TharaThemeExplorer.UI
             this.title = title;
             this.subtitle = subtitle;
             this.iconColor = iconColor;
+            useThemeAccent = iconColor.ToArgb() == ThemeColors.Accent.ToArgb();
 
             SetStyle(ControlStyles.UserPaint |
                      ControlStyles.ResizeRedraw |
@@ -122,6 +130,31 @@ namespace TharaThemeExplorer.UI
 
             currentY += rowH;
             Height = currentY + ThemeColors.S(8);
+        }
+
+        public void AddOptionalStatus(Control status)
+        {
+            if (status == null || optionalStatus != null)
+                throw new InvalidOperationException("Only one optional status can be attached to a card.");
+            optionalStatus = status;
+            optionalStatusExtra = ThemeColors.S(8) + status.Height;
+            optionalStatusVisible = false;
+            status.BackColor = ThemeColors.CCard;
+            status.Left = ThemeColors.S(16);
+            status.Top = currentY - ThemeColors.S(6);
+            status.Visible = false;
+            Controls.Add(status);
+        }
+
+        public void SetOptionalStatusVisible(bool visible)
+        {
+            if (optionalStatus == null || optionalStatusVisible == visible) return;
+            optionalStatusVisible = visible;
+            currentY += visible ? optionalStatusExtra : -optionalStatusExtra;
+            optionalStatus.Visible = visible;
+            Height = ContentHeight;
+            if (ContentHeightChanged != null) ContentHeightChanged(this, EventArgs.Empty);
+            Invalidate();
         }
 
         public void Note(string text)
@@ -223,16 +256,17 @@ namespace TharaThemeExplorer.UI
 
             // Top Icon Badge
             Rectangle iconCircle = new Rectangle(ThemeColors.S(16), ThemeColors.S(15), ThemeColors.S(38), ThemeColors.S(38));
-            using (SolidBrush iconBg = new SolidBrush(ThemeColors.Tint(iconColor, !ThemeColors.Dark ? 30 : 38)))
+            Color currentIconColor = useThemeAccent ? ThemeColors.Accent : iconColor;
+            using (SolidBrush iconBg = new SolidBrush(ThemeColors.Tint(currentIconColor, !ThemeColors.Dark ? 30 : 38)))
             {
                 g.FillEllipse(iconBg, iconCircle);
             }
-            using (Pen iconBorder = new Pen(ThemeColors.Tint(iconColor, 70)))
+            using (Pen iconBorder = new Pen(ThemeColors.Tint(currentIconColor, 70)))
             {
                 g.DrawEllipse(iconBorder, iconCircle);
             }
             Font glyphF = ThemeColors.IconFont(11.5f);
-            TextRenderer.DrawText(g, glyph, glyphF, iconCircle, iconColor,
+            TextRenderer.DrawText(g, glyph, glyphF, iconCircle, currentIconColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             // Card Header Text

@@ -13,6 +13,8 @@ namespace TharaThemeExplorer.UI
         public bool Primary { get; set; }
         public bool IconOnly { get; set; }
         public bool TextOnly { get; set; }
+        public bool KeepAccentOnHover { get; set; }
+        public int BackgroundInset { get; set; }
         public float IconSize { get; set; }
         public string IconGlyph { get; set; }
 
@@ -77,7 +79,7 @@ namespace TharaThemeExplorer.UI
             {
                 if (Enabled)
                 {
-                    bg = !hover ? ThemeColors.Accent : (!ThemeColors.Dark ? ThemeColors.CIndigo : ThemeColors.CPinkDark);
+                    bg = !hover || KeepAccentOnHover ? ThemeColors.Accent : (!ThemeColors.Dark ? ThemeColors.CIndigo : ThemeColors.CPinkDark);
                     fg = Color.White;
                     border = bg;
                 }
@@ -101,8 +103,10 @@ namespace TharaThemeExplorer.UI
                 fg = !Enabled ? ThemeColors.CSub : ThemeColors.CText;
             }
 
-            int radius = !IconOnly ? ThemeColors.S(10) : (rect.Height / 2);
-            using (GraphicsPath path = ThemeColors.RoundRect(rect, radius))
+            int inset = Math.Max(0, ThemeColors.S(BackgroundInset));
+            Rectangle background = Rectangle.Inflate(rect, -inset, -inset);
+            int radius = !IconOnly ? Math.Min(ThemeColors.S(10), Math.Min(background.Width, background.Height) / 2) : (background.Height / 2);
+            using (GraphicsPath path = ThemeColors.RoundRect(background, radius))
             {
                 if (bg.A > 0)
                 {

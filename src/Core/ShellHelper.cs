@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -34,6 +35,11 @@ namespace TharaThemeExplorer.Core
             @"Software\Classes\Directory\shell\runas"
         };
         public const string TOLABEL = "Take Ownership";
+        private static readonly string[] TakeOwnershipCommands = new string[]
+        {
+            "cmd.exe /c takeown /f \"%1\" && icacls \"%1\" /grant *S-1-5-32-544:F",
+            "cmd.exe /c takeown /f \"%1\" /r /d y && icacls \"%1\" /grant *S-1-5-32-544:F /t"
+        };
 
         public static readonly string[] PCGUIDS = new string[]
         {
@@ -45,6 +51,24 @@ namespace TharaThemeExplorer.Core
             "{f86fa3ab-70d2-4fc7-9c99-fcbf05467f3a}"
         };
         public const string PCKEY = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\MyComputer\NameSpace\";
+        private const string FolderDescriptions = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderDescriptions\";
+        private static readonly string[] Win10ThisPcFolders = new string[]
+        {
+            "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", // Desktop
+            "{f42ee2d3-909f-4907-8871-4c22fc0bf756}", // Documents
+            "{7d83ee9b-2244-4e70-b1f5-5393042af1e4}", // Downloads
+            "{a0c69a99-21c8-4671-8703-7934162fcf1d}", // Music
+            "{0ddd015d-b06c-45d5-8c4c-f59713854639}", // Pictures
+            "{35286a68-3c57-41a1-bbb1-0eae73d76c95}", // Videos
+            "{31c0dd25-9439-4f12-bf41-7ff4eda38722}"  // 3D Objects (when present)
+        };
+
+        private static RegistryView[] FolderRegistryViews()
+        {
+            return Environment.Is64BitOperatingSystem
+                ? new RegistryView[] { RegistryView.Registry64, RegistryView.Registry32 }
+                : new RegistryView[] { RegistryView.Registry32 };
+        }
 
         public static readonly string[,] NavItems = new string[,]
         {
@@ -155,16 +179,64 @@ namespace TharaThemeExplorer.Core
             catch { }
         }
 
+        private static void WriteDwordStrict(string key, string name, int value)
+        {
+            Registry.SetValue(key, name, value, RegistryValueKind.DWord);
+        }
+
+        private static void DeleteDwordStrict(string key, string name)
+        {
+            if (!key.StartsWith(HKCUP, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("This setting is not in the current-user registry.");
+            using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(key.Substring(HKCUP.Length), true))
+                if (rk != null) rk.DeleteValue(name, false);
+        }
+
         public static void ReadStyleState(out bool win10Explorer, out bool win10ContextMenu)
         {
-            using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(E10A))
+            win10Explorer = EmptyInprocOverrideExists(E10A) || EmptyInprocOverrideExists(E10B);
+            win10ContextMenu = EmptyInprocOverrideExists(CCMA);
+        }
+
+        private static bool EmptyInprocOverrideExists(string classPath)
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(classPath + @"\InProcServer32"))
             {
-                win10Explorer = (rk != null);
+                return key != null && (key.GetValue(string.Empty) as string) == string.Empty;
             }
-            using (RegistryKey rk2 = Registry.CurrentUser.OpenSubKey(CCMB))
+        }
+
+        private static void EnsureInprocOverrideAvailable(string classPath)
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(classPath + @"\InProcServer32"))
             {
-                win10ContextMenu = (rk2 != null);
+                object value = key == null ? null : key.GetValue(string.Empty);
+                if (value != null && (!(value is string) || (string)value != string.Empty))
+                    throw new InvalidOperationException("Another application has an Explorer override here. Its setting was preserved.");
             }
+        }
+
+        private static void RemoveEmptyInprocOverride(string classPath)
+        {
+            bool removeClass = false;
+            using (RegistryKey cls = Registry.CurrentUser.OpenSubKey(classPath, true))
+            {
+                if (cls == null) return;
+                bool removeServer = false;
+                bool changed = false;
+                using (RegistryKey server = cls.OpenSubKey("InProcServer32", true))
+                {
+                    if (server != null && (server.GetValue(string.Empty) as string) == string.Empty)
+                    {
+                        server.DeleteValue(string.Empty, false);
+                        changed = true;
+                        removeServer = server.ValueCount == 0 && server.SubKeyCount == 0;
+                    }
+                }
+                if (removeServer) cls.DeleteSubKey("InProcServer32", false);
+                removeClass = changed && cls.ValueCount == 0 && cls.SubKeyCount == 0;
+            }
+            if (removeClass) Registry.CurrentUser.DeleteSubKey(classPath, false);
         }
 
         public static bool RibbonOverrideActive()
@@ -188,24 +260,23 @@ namespace TharaThemeExplorer.Core
             {
                 if (block)
                 {
+                    EnsureInprocOverrideAvailable(RIBBONCLSID);
                     Registry.SetValue(HKCUP + RIBBONCLSID + @"\InProcServer32", string.Empty, string.Empty, RegistryValueKind.String);
                 }
                 else if (RibbonOverrideActive())
                 {
-                    Registry.CurrentUser.DeleteSubKeyTree(RIBBONCLSID, false);
+                    RemoveEmptyInprocOverride(RIBBONCLSID);
                 }
             }
-            catch { }
+            catch { throw; }
         }
 
         public static bool TakeOwnershipOn()
         {
             try
             {
-                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(TOKEYS[0]))
-                {
-                    return rk != null && (rk.GetValue(string.Empty) as string) == TOLABEL;
-                }
+                return IsTakeOwnershipEntry(TOKEYS[0], TakeOwnershipCommands[0]) &&
+                       IsTakeOwnershipEntry(TOKEYS[1], TakeOwnershipCommands[1]);
             }
             catch
             {
@@ -217,21 +288,51 @@ namespace TharaThemeExplorer.Core
         {
             if (on)
             {
-                WriteTakeOwnership(TOKEYS[0], "cmd.exe /c takeown /f \"%1\" && icacls \"%1\" /grant *S-1-5-32-544:F");
-                WriteTakeOwnership(TOKEYS[1], "cmd.exe /c takeown /f \"%1\" /r /d y && icacls \"%1\" /grant *S-1-5-32-544:F /t");
+                // Check both locations before writing either one.
+                for (int i = 0; i < TOKEYS.Length; i++)
+                {
+                    using (RegistryKey existing = Registry.CurrentUser.OpenSubKey(TOKEYS[i]))
+                        if (existing != null && (existing.ValueCount > 0 || existing.SubKeyCount > 0) &&
+                            !IsTakeOwnershipEntry(TOKEYS[i], TakeOwnershipCommands[i]))
+                            throw new InvalidOperationException("A different Take Ownership context-menu command already exists and was preserved.");
+                }
+                for (int i = 0; i < TOKEYS.Length; i++) WriteTakeOwnership(TOKEYS[i], TakeOwnershipCommands[i]);
             }
             else
             {
-                foreach (string sub in TOKEYS)
-                {
-                    using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(sub))
-                    {
-                        if (rk == null || (rk.GetValue(string.Empty) as string) != TOLABEL)
-                            continue;
-                    }
-                    Registry.CurrentUser.DeleteSubKeyTree(sub, false);
-                }
+                for (int i = 0; i < TOKEYS.Length; i++) RemoveTakeOwnership(TOKEYS[i], TakeOwnershipCommands[i]);
             }
+        }
+
+        private static bool IsTakeOwnershipEntry(string sub, string expectedCommand)
+        {
+            using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(sub))
+            using (RegistryKey cmd = rk == null ? null : rk.OpenSubKey("command"))
+                return rk != null && cmd != null && (rk.GetValue(string.Empty) as string) == TOLABEL &&
+                       (cmd.GetValue(string.Empty) as string) == expectedCommand;
+        }
+
+        private static void RemoveTakeOwnership(string sub, string expectedCommand)
+        {
+            if (!IsTakeOwnershipEntry(sub, expectedCommand)) return;
+            bool removeParent = false;
+            using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(sub, true))
+            {
+                if (rk == null) return;
+                bool removeCommand = false;
+                using (RegistryKey cmd = rk.OpenSubKey("command", true))
+                {
+                    if (cmd == null || (cmd.GetValue(string.Empty) as string) != expectedCommand) return;
+                    cmd.DeleteValue(string.Empty, false);
+                    removeCommand = cmd.ValueCount == 0 && cmd.SubKeyCount == 0;
+                }
+                if (removeCommand) rk.DeleteSubKey("command", false);
+                rk.DeleteValue(string.Empty, false);
+                if ((rk.GetValue("HasLUAShield") as string) == string.Empty) rk.DeleteValue("HasLUAShield", false);
+                if ((rk.GetValue("NoWorkingDirectory") as string) == string.Empty) rk.DeleteValue("NoWorkingDirectory", false);
+                removeParent = rk.ValueCount == 0 && rk.SubKeyCount == 0;
+            }
+            if (removeParent) Registry.CurrentUser.DeleteSubKey(sub, false);
         }
 
         private static void WriteTakeOwnership(string sub, string cmd)
@@ -267,6 +368,36 @@ namespace TharaThemeExplorer.Core
         {
             try
             {
+                if (!IsWin11)
+                {
+                    // Explorer uses the native registry view. A partially hidden group is
+                    // still visible, so leave the switch on until all managed folders
+                    // are hidden; this also lets the user retry a partial change.
+                    RegistryView view = Environment.Is64BitOperatingSystem ? RegistryView.Registry64 : RegistryView.Registry32;
+                    using (RegistryKey root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
+                    {
+                        for (int i = 0; i < Win10ThisPcFolders.Length; i++)
+                        {
+                            if (i == 6)
+                            {
+                                // 3D Objects is absent on some systems, even when its
+                                // folder description remains registered.
+                                using (RegistryKey ns = root.OpenSubKey(PCKEY + "{0DB7E03F-FC29-4DC6-9020-FF41B59E513A}"))
+                                    if (ns == null) continue;
+                            }
+                            using (RegistryKey folder = root.OpenSubKey(FolderDescriptions + Win10ThisPcFolders[i]))
+                            {
+                                if (folder == null) continue;
+                                using (RegistryKey bag = folder.OpenSubKey("PropertyBag"))
+                                {
+                                    string policy = bag == null ? null : bag.GetValue("ThisPCPolicy") as string;
+                                    if (!string.Equals(policy, "Hide", StringComparison.OrdinalIgnoreCase)) return true;
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                }
                 foreach (string guid in PCGUIDS)
                 {
                     using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(PCKEY + guid))
@@ -287,25 +418,55 @@ namespace TharaThemeExplorer.Core
 
         public static void SetThisPcFolders(bool on)
         {
+            if (!IsWin11)
+            {
+                RunThisPcElevated(on);
+                return;
+            }
+            RunThisPcElevated(on);
             string sortKey = HKCUP + @"Software\Classes\CLSID\" + PCGUIDS[0] + @"\ShellFolder";
             if (on)
             {
-                WriteDword(sortKey, "SortOrderIndex", 0);
+                WriteDwordStrict(sortKey, "SortOrderIndex", 0);
             }
             else
             {
-                DeleteDword(sortKey, "SortOrderIndex");
+                DeleteDwordStrict(sortKey, "SortOrderIndex");
             }
 
-            using (Process proc = Process.Start(new ProcessStartInfo(MyExe, "/thispc " + (on ? "on" : "off"))
+        }
+
+        private static void RunThisPcElevated(bool on)
+        {
+            Process started;
+            try
             {
-                Verb = "runas",
-                UseShellExecute = true
-            }))
+                started = Process.Start(new ProcessStartInfo(MyExe, "/thispc " + (on ? "on" : "off"))
+                {
+                    Verb = "runas",
+                    UseShellExecute = true
+                });
+            }
+            catch (Win32Exception ex)
+            {
+                if (ex.NativeErrorCode == 1223)
+                    throw new OperationCanceledException("Administrator approval was cancelled.", ex);
+                throw;
+            }
+            using (Process proc = started)
             {
                 if (proc == null) throw new Exception("Administrator helper could not be started.");
-                proc.WaitForExit(30000);
-                if (proc.ExitCode != 0) throw new Exception("Administrator helper failed with code " + proc.ExitCode);
+                if (!proc.WaitForExit(30000))
+                    throw new TimeoutException("The administrator helper did not finish within 30 seconds. It may still be running.");
+                if (proc.ExitCode != 0)
+                {
+                    string detail = proc.ExitCode == 2 ? "Windows refused one or more registry changes." :
+                        proc.ExitCode == 3 ? "Administrator permission is required." :
+                        proc.ExitCode == 4 ? "The requested folder option was invalid." :
+                        proc.ExitCode == 5 ? "The folder registry entries were not found." :
+                        "Administrator helper failed with code " + proc.ExitCode + ".";
+                    throw new InvalidOperationException(detail);
+                }
             }
         }
 
@@ -315,6 +476,43 @@ namespace TharaThemeExplorer.Core
             if (!IsAdmin()) return 3;
             try
             {
+                if (!IsWin11)
+                {
+                    int updated = 0;
+                    foreach (RegistryView view in FolderRegistryViews())
+                    using (RegistryKey root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
+                    foreach (string guid in Win10ThisPcFolders)
+                    using (RegistryKey folder = root.OpenSubKey(FolderDescriptions + guid, true))
+                    {
+                        if (folder == null) continue;
+                        using (RegistryKey bag = folder.CreateSubKey("PropertyBag"))
+                        {
+                            if (bag == null) throw new InvalidOperationException("Could not open folder policy.");
+                            bag.SetValue("ThisPCPolicy", mode == "on" ? "Show" : "Hide", RegistryValueKind.String);
+                            updated++;
+                        }
+                    }
+                    if (mode == "on")
+                    {
+                        // Restore the exact namespace flags written by older versions
+                        // of this app on Windows 10, without changing other flags.
+                        foreach (RegistryView view in FolderRegistryViews())
+                        using (RegistryKey root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
+                        foreach (string guid in PCGUIDS)
+                        using (RegistryKey key = root.OpenSubKey(PCKEY + guid, true))
+                        {
+                            if (key == null) continue;
+                            object feature = key.GetValue("HideIfEnabled");
+                            object hidden = key.GetValue("HiddenByDefault");
+                            if (feature is int && (int)feature == 36354489 && hidden is int && (int)hidden == 1)
+                            {
+                                key.DeleteValue("HideIfEnabled", false);
+                                key.SetValue("HiddenByDefault", 0, RegistryValueKind.DWord);
+                            }
+                        }
+                    }
+                    return updated == 0 ? 5 : 0;
+                }
                 foreach (string guid in PCGUIDS)
                 {
                     using (RegistryKey rk = Registry.LocalMachine.CreateSubKey(PCKEY + guid))
@@ -368,7 +566,8 @@ namespace TharaThemeExplorer.Core
                 {
                     using (RegistryKey rk = Registry.CurrentUser.CreateSubKey(path))
                     {
-                        if (rk != null) rk.SetValue("System.IsPinnedToNameSpaceTree", 0, RegistryValueKind.DWord);
+                        if (rk == null) throw new InvalidOperationException("Could not open the navigation setting.");
+                        rk.SetValue("System.IsPinnedToNameSpaceTree", 0, RegistryValueKind.DWord);
                     }
                 }
                 else
@@ -379,7 +578,7 @@ namespace TharaThemeExplorer.Core
                     }
                 }
             }
-            catch { }
+            catch { throw; }
         }
 
         public static ChoiceOpt PosOpt(string label, string clsid, int bottomVal)
@@ -393,8 +592,8 @@ namespace TharaThemeExplorer.Core
                 ReadFn = () => ReadDword(key, "SortOrderIndex", -1) < bottomVal ? 0 : 1,
                 WriteFn = v =>
                 {
-                    if (v == 1) WriteDword(key, "SortOrderIndex", bottomVal);
-                    else DeleteDword(key, "SortOrderIndex");
+                    if (v == 1) WriteDwordStrict(key, "SortOrderIndex", bottomVal);
+                    else DeleteDwordStrict(key, "SortOrderIndex");
                 }
             };
         }
@@ -426,21 +625,9 @@ namespace TharaThemeExplorer.Core
                         Registry.SetValue(key, name, 0, RegistryValueKind.DWord);
                     }
 
-                    // Clean up legacy incorrect GUID if present from earlier versions
-                    try
-                    {
-                        string oldSub = @"Software\Classes\CLSID\{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}";
-                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(oldSub, true))
-                        {
-                            if (rk != null) Registry.CurrentUser.DeleteSubKeyTree(oldSub, false);
-                        }
-                    }
-                    catch { }
+                    // Do not remove the older CLSID: other software may own values there.
                 }
-                catch (Exception ex)
-                {
-                    LogErr("Write ControlPanelOpt", ex);
-                }
+                catch { throw; }
             }, true);
         }
 
@@ -474,10 +661,20 @@ namespace TharaThemeExplorer.Core
             return new RegOpt("Disable Mica effect in Explorer windows", MyKey, "DisableMica", 1, 0, 0, false) { OffNeedsRefresh = true };
         }
 
+        internal static string MicaErrorStatus(bool selected, bool saved, int build, object result)
+        {
+            if (selected != saved) return null;
+            if (saved && build < 22621) return "Status: Not supported on this build";
+            if (result is int && (int)result != 0)
+                return "Status: Last Mica operation failed (0x" + ((int)result).ToString("X8") + ")";
+            return null;
+        }
+
         public static RegOpt ThisPcOpt()
         {
             RegOpt opt = RegOpt.Custom("Show the Folders group", ThisPcFoldersShown, SetThisPcFolders, true);
             opt.DefaultOn = !IsWin11;
+            opt.RequiresExplorerRestart = true;
             return opt;
         }
 
@@ -498,6 +695,7 @@ namespace TharaThemeExplorer.Core
             {
                 try
                 {
+                    EnsureInprocOverrideAvailable(CCMA);
                     Registry.SetValue(HKCUP + CCMB, string.Empty, string.Empty, RegistryValueKind.String);
                     Log("Context menu: set to Windows 10");
                 }
@@ -507,7 +705,7 @@ namespace TharaThemeExplorer.Core
             {
                 try
                 {
-                    Registry.CurrentUser.DeleteSubKeyTree(CCMA, false);
+                    RemoveEmptyInprocOverride(CCMA);
                     Log("Context menu: set to Windows 11");
                 }
                 catch (Exception ex) { LogErr("Context menu -> Windows 11", ex); }
@@ -517,6 +715,8 @@ namespace TharaThemeExplorer.Core
             {
                 try
                 {
+                    EnsureInprocOverrideAvailable(E10A);
+                    EnsureInprocOverrideAvailable(E10B);
                     Registry.SetValue(HKCUP + E10A + @"\InProcServer32", string.Empty, string.Empty, RegistryValueKind.String);
                     Registry.SetValue(HKCUP + E10B + @"\InProcServer32", string.Empty, string.Empty, RegistryValueKind.String);
                     byte[] itbar = new byte[]
@@ -590,8 +790,8 @@ namespace TharaThemeExplorer.Core
             {
                 try
                 {
-                    Registry.CurrentUser.DeleteSubKeyTree(E10A, false);
-                    Registry.CurrentUser.DeleteSubKeyTree(E10B, false);
+                    RemoveEmptyInprocOverride(E10A);
+                    RemoveEmptyInprocOverride(E10B);
                     Log("Explorer style: set to Windows 11");
                 }
                 catch (Exception ex) { LogErr("Explorer style -> Windows 11", ex); }
@@ -613,46 +813,183 @@ namespace TharaThemeExplorer.Core
             }
         }
 
-        public static List<string> CaptureExplorerFolders()
+        internal static string ExplorerRestoreLocation(string shellPath, string locationUrl)
         {
-            List<string> list = new List<string>();
+            // Folder.Self.Path handles both ordinary paths and shell namespaces.
+            // Ignore arbitrary URLs or malformed values when launching Explorer.
+            if (!string.IsNullOrEmpty(shellPath) && shellPath.IndexOfAny(new char[] { '"', '\0', '\r', '\n' }) < 0)
+            {
+                if (shellPath.StartsWith(@"\\", StringComparison.Ordinal) ||
+                    (shellPath.Length >= 3 && char.IsLetter(shellPath[0]) && shellPath[1] == ':' && shellPath[2] == '\\') ||
+                    shellPath.StartsWith("::{", StringComparison.Ordinal) ||
+                    shellPath.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+                    return shellPath;
+            }
+            if (!string.IsNullOrEmpty(locationUrl))
+            {
+                Uri uri;
+                if (Uri.TryCreate(locationUrl, UriKind.Absolute, out uri) && uri.IsFile)
+                {
+                    string local = uri.LocalPath;
+                    if (local.IndexOfAny(new char[] { '"', '\0', '\r', '\n' }) < 0)
+                        return local;
+                }
+            }
+            return null;
+        }
+
+        private static object ComProperty(object obj, string name)
+        {
+            return obj.GetType().InvokeMember(name, BindingFlags.GetProperty, null, obj, null);
+        }
+
+        internal sealed class ExplorerWindowSnapshot
+        {
+            public IntPtr Handle;
+            public string Location;
+        }
+
+        internal static List<ExplorerWindowSnapshot> CaptureExplorerSnapshots(object windows, Func<IntPtr, bool> isExplorer)
+        {
+            List<ExplorerWindowSnapshot> list = new List<ExplorerWindowSnapshot>();
+            int count = Convert.ToInt32(ComProperty(windows, "Count"));
+            for (int i = 0; i < count; i++)
+            {
+                try
+                {
+                    object item = windows.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, windows, new object[] { i });
+                    if (item == null) continue;
+                    long hwnd = Convert.ToInt64(ComProperty(item, "HWND"));
+                    if (!isExplorer((IntPtr)hwnd)) continue;
+                    string path = null;
+                    string url = null;
+                    try
+                    {
+                        object document = ComProperty(item, "Document");
+                        object folder = ComProperty(document, "Folder");
+                        object self = ComProperty(folder, "Self");
+                        path = Convert.ToString(ComProperty(self, "Path"));
+                    }
+                    catch { }
+                    try { url = Convert.ToString(ComProperty(item, "LocationURL")); }
+                    catch { }
+                    string location = ExplorerRestoreLocation(path, url);
+                    if (location == null) Log("Could not record one Explorer location; it will reopen at the default location.");
+                    list.Add(new ExplorerWindowSnapshot { Handle = (IntPtr)hwnd, Location = location });
+                }
+                catch { /* A window may have closed during enumeration. */ }
+            }
+            return list;
+        }
+
+        internal static List<string> CaptureExplorerWindows(object windows, Func<IntPtr, bool> isExplorer)
+        {
+            List<string> locations = new List<string>();
+            foreach (ExplorerWindowSnapshot window in CaptureExplorerSnapshots(windows, isExplorer))
+                locations.Add(window.Location);
+            return locations;
+        }
+
+        private static List<ExplorerWindowSnapshot> CaptureExplorerWindowsForRefresh()
+        {
+            List<ExplorerWindowSnapshot> list = new List<ExplorerWindowSnapshot>();
             try
             {
                 Type shellType = Type.GetTypeFromProgID("Shell.Application");
-                if (shellType != null)
-                {
-                    object shell = Activator.CreateInstance(shellType);
-                    object windows = shellType.InvokeMember("Windows", BindingFlags.InvokeMethod, null, shell, null);
-                    int count = Convert.ToInt32(windows.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, windows, null));
-                    for (int i = 0; i < count; i++)
-                    {
-                        try
-                        {
-                            object item = windows.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, windows, new object[] { i });
-                            if (item != null)
-                            {
-                                long hwnd = Convert.ToInt64(item.GetType().InvokeMember("HWND", BindingFlags.GetProperty, null, item, null));
-                                if (IsExplorerFrame((IntPtr)hwnd))
-                                {
-                                    string url = Convert.ToString(item.GetType().InvokeMember("LocationURL", BindingFlags.GetProperty, null, item, null));
-                                    string localPath = string.Empty;
-                                    if (!string.IsNullOrEmpty(url) && url.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        localPath = new Uri(url).LocalPath;
-                                    }
-                                    list.Add(localPath);
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-                }
+                if (shellType == null) throw new InvalidOperationException("Windows Shell is unavailable.");
+                object shell = Activator.CreateInstance(shellType);
+                object windows = shellType.InvokeMember("Windows", BindingFlags.InvokeMethod, null, shell, null);
+                list = CaptureExplorerSnapshots(windows, IsExplorerFrame);
             }
             catch (Exception ex)
             {
-                LogErr("Reading open Explorer windows", ex);
+                // Do not close open windows when their locations could not be saved.
+                if (NativeMethods.FindWindow("CabinetWClass", null) != IntPtr.Zero)
+                    throw new InvalidOperationException("Could not save open Explorer locations. Close Explorer windows and try again.", ex);
             }
+            if (list.Count == 0 && NativeMethods.FindWindow("CabinetWClass", null) != IntPtr.Zero)
+                throw new InvalidOperationException("Could not save open Explorer locations. Close Explorer windows and try again.");
             return list;
+        }
+
+        public static List<string> CaptureExplorerFolders()
+        {
+            List<string> locations = new List<string>();
+            foreach (ExplorerWindowSnapshot window in CaptureExplorerWindowsForRefresh())
+                locations.Add(window.Location);
+            return locations;
+        }
+
+        internal static void CloseAndReopenWindows(List<ExplorerWindowSnapshot> windows,
+            Func<IntPtr, bool> exists, Func<IntPtr, bool> close, Action wait,
+            Action notify, Action<string> reopen)
+        {
+            HashSet<IntPtr> pending = new HashSet<IntPtr>();
+            HashSet<IntPtr> closed = new HashSet<IntPtr>();
+            HashSet<IntPtr> attempted = new HashSet<IntPtr>();
+            bool closeFailed = false;
+
+            foreach (ExplorerWindowSnapshot window in windows)
+            {
+                if (!attempted.Add(window.Handle) || !exists(window.Handle)) continue;
+                try
+                {
+                    if (close(window.Handle)) pending.Add(window.Handle);
+                    else closeFailed = true;
+                }
+                catch { closeFailed = true; }
+            }
+
+            // Wait briefly for asynchronous WM_CLOSE messages to be processed.
+            for (int attempt = 0; attempt < 50 && pending.Count > 0; attempt++)
+            {
+                List<IntPtr> finished = new List<IntPtr>();
+                foreach (IntPtr handle in pending)
+                    if (!exists(handle)) finished.Add(handle);
+                foreach (IntPtr handle in finished) { pending.Remove(handle); closed.Add(handle); }
+                if (pending.Count > 0) wait();
+            }
+            foreach (IntPtr handle in pending)
+            {
+                if (!exists(handle)) closed.Add(handle);
+                else closeFailed = true;
+            }
+
+            // A notification failure must not prevent already-closed windows reopening.
+            try { notify(); }
+            catch (Exception ex) { Log("Explorer notification failed: " + ex.Message); }
+            foreach (ExplorerWindowSnapshot window in windows)
+                if (closed.Contains(window.Handle)) reopen(window.Location);
+
+            if (closeFailed)
+                throw new InvalidOperationException("Some Explorer windows could not close. Their original windows were left open.");
+        }
+
+        public static void RefreshOpenExplorerWindows()
+        {
+            List<ExplorerWindowSnapshot> windows = CaptureExplorerWindowsForRefresh();
+            HashSet<IntPtr> capturedHandles = new HashSet<IntPtr>();
+            foreach (ExplorerWindowSnapshot window in windows) capturedHandles.Add(window.Handle);
+            bool uncapturedWindow = false;
+            NativeMethods.EnumWindows(delegate(IntPtr handle, IntPtr unused)
+            {
+                if (NativeMethods.IsWindowVisible(handle) && IsExplorerFrame(handle) && !capturedHandles.Contains(handle))
+                    uncapturedWindow = true;
+                return true;
+            }, IntPtr.Zero);
+            CloseAndReopenWindows(windows,
+                handle => NativeMethods.IsWindow(handle),
+                handle => NativeMethods.PostMessage(handle, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero),
+                () => Thread.Sleep(100),
+                () =>
+                {
+                    NativeMethods.PostMessage((IntPtr)0xffff, NativeMethods.WM_SETTINGCHANGE, IntPtr.Zero, IntPtr.Zero);
+                    NativeMethods.SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
+                },
+                path => { OpenExplorerAt(path); Thread.Sleep(150); });
+            Log("Explorer windows closed and reopened: " + windows.Count);
+            if (uncapturedWindow)
+                throw new InvalidOperationException("An Explorer window could not be saved and was left open. Please reopen it manually.");
         }
 
         public static bool IsExplorerFrame(IntPtr h)
@@ -661,60 +998,32 @@ namespace TharaThemeExplorer.Core
             return NativeMethods.GetClassName(h, sb, 64) > 0 && sb.ToString() == "CabinetWClass";
         }
 
-        public static void CloseExplorerWindows()
-        {
-            IntPtr h = NativeMethods.FindWindow("CabinetWClass", null);
-            while (h != IntPtr.Zero)
-            {
-                try
-                {
-                    if (NativeMethods.IsWindowVisible(h))
-                    {
-                        NativeMethods.PostMessage(h, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-                    }
-                    h = NativeMethods.FindWindowEx(IntPtr.Zero, h, "CabinetWClass", null);
-                }
-                catch { break; }
-            }
-        }
-
         public static void RestartExplorer()
         {
             int sessionId = Process.GetCurrentProcess().SessionId;
             int count = 0;
+            bool stopFailed = false;
             foreach (Process p in Process.GetProcessesByName("explorer"))
             {
-                try
+                using (p)
                 {
-                    if (p.SessionId == sessionId)
+                    try
                     {
-                        p.Kill();
-                        p.WaitForExit(5000);
-                        count++;
+                        if (p.SessionId == sessionId)
+                        {
+                            p.Kill();
+                            if (!p.WaitForExit(5000)) throw new TimeoutException("The process did not exit.");
+                            count++;
+                        }
                     }
+                    catch (Exception ex) { stopFailed = true; LogErr("Kill explorer pid " + p.Id, ex); }
                 }
-                catch (Exception ex) { LogErr("Kill explorer pid " + p.Id, ex); }
             }
             Log("Explorer processes killed: " + count);
-            if (count == 0)
-            {
-                try
-                {
-                    using (Process tk = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "taskkill.exe"), "/f /im explorer.exe")
-                    {
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }))
-                    {
-                        if (tk != null) tk.WaitForExit(5000);
-                    }
-                }
-                catch (Exception ex) { LogErr("taskkill", ex); }
-            }
-            Thread.Sleep(2000);
+            Thread.Sleep(1200);
             try
             {
-                if (Process.GetProcessesByName("explorer").Length == 0)
+                if (!ExplorerRunningInSession(sessionId))
                 {
                     Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"))
                     {
@@ -722,8 +1031,25 @@ namespace TharaThemeExplorer.Core
                     });
                     Log("Explorer restarted explicitly");
                 }
+                for (int attempt = 0; attempt < 20 && !ExplorerRunningInSession(sessionId); attempt++) Thread.Sleep(250);
+                if (!ExplorerRunningInSession(sessionId)) throw new InvalidOperationException("Windows Explorer did not start in this session.");
             }
-            catch (Exception ex) { LogErr("Start explorer fallback", ex); }
+            catch (Exception ex) { throw new InvalidOperationException("Could not restart Windows Explorer.", ex); }
+            if (stopFailed) throw new InvalidOperationException("Some Explorer processes could not be restarted.");
+        }
+
+        private static bool ExplorerRunningInSession(int sessionId)
+        {
+            bool found = false;
+            foreach (Process process in Process.GetProcessesByName("explorer"))
+            {
+                using (process)
+                {
+                    try { if (process.SessionId == sessionId) found = true; }
+                    catch { }
+                }
+            }
+            return found;
         }
 
         public static void OpenExplorerAt(string path)
@@ -750,21 +1076,30 @@ namespace TharaThemeExplorer.Core
 
         public static void RefreshExplorer(bool restartShell)
         {
-            List<string> openFolders = CaptureExplorerFolders();
-            Log("Open explorer windows: " + openFolders.Count);
-            CloseExplorerWindows();
-            Thread.Sleep(600);
-            if (restartShell)
+            if (!restartShell)
             {
-                Log("Restarting Explorer");
-                RestartExplorer();
+                int refreshLogStart = RunLog.Count;
+                RefreshOpenExplorerWindows();
+                for (int i = refreshLogStart; i < RunLog.Count; i++)
+                    if (RunLog[i].Contains("FAILED")) throw new InvalidOperationException("Some Explorer windows could not be reopened. See the log for details.");
+                return;
             }
+            List<string> openFolders = CaptureExplorerFolders();
+            int logStart = RunLog.Count;
+            Log("Open explorer windows: " + openFolders.Count);
+            Log("Restarting Explorer");
+            Exception restartError = null;
+            try { RestartExplorer(); }
+            catch (Exception ex) { restartError = ex; }
             foreach (string path in openFolders)
             {
                 OpenExplorerAt(path);
                 Thread.Sleep(150);
             }
             Log("Explorer windows reopened");
+            if (restartError != null) throw new InvalidOperationException("Explorer did not restart completely. Some windows may have reopened.", restartError);
+            for (int i = logStart; i < RunLog.Count; i++)
+                if (RunLog[i].Contains("FAILED")) throw new InvalidOperationException("Some Explorer windows could not be restored. See the log for details.");
         }
     }
 }

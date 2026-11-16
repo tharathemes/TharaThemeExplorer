@@ -24,13 +24,15 @@ namespace TharaThemeExplorer.Core
         }
 
         public const uint WM_CLOSE = 0x0010;
+        public const uint WM_SETTINGCHANGE = 0x001A;
+        public const uint WM_THEMECHANGED = 0x031A;
         public const uint WM_SETREDRAW = 0x000B;
         public const int WS_EX_COMPOSITED = 0x02000000;
 
         public const uint SPI_GETNONCLIENTMETRICS = 41;
         public const uint SPI_SETNONCLIENTMETRICS = 42;
-        public const uint SPI_GETICONTITLELOGFONT = 45;
-        public const uint SPI_SETICONTITLELOGFONT = 46;
+        public const uint SPI_GETICONMETRICS = 45;
+        public const uint SPI_SETICONMETRICS = 46;
         public const uint SPIF_UPDATEINIFILE = 0x01;
         public const uint SPIF_SENDCHANGE = 0x02;
 
@@ -50,11 +52,11 @@ namespace TharaThemeExplorer.Core
         public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
         [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
-
-        [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("shell32.dll")]
+        public static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
 
         [DllImport("user32.dll")]
         public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
